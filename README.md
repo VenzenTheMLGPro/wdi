@@ -14,71 +14,87 @@ edited: edited due to a task
 #### nagłówek H4
 ##### nagłówek H5
 ```
-import numpy as np
+const float theta_spacing = 0.07;
+const float phi_spacing   = 0.02;
 
-screen_size = 40
-theta_spacing = 0.07
-phi_spacing = 0.02
-illumination = np.fromiter(".,-~:;=!*#$@", dtype="<U1")
+const float R1 = 1;
+const float R2 = 2;
+const float K2 = 5;
+// Calculate K1 based on screen size: the maximum x-distance occurs
+// roughly at the edge of the torus, which is at x=R1+R2, z=0.  we
+// want that to be displaced 3/8ths of the width of the screen, which
+// is 3/4th of the way from the center to the side of the screen.
+// screen_width*3/8 = K1*(R1+R2)/(K2+0)
+// screen_width*K2*3/(8*(R1+R2)) = K1
+const float K1 = screen_width*K2*3/(8*(R1+R2));
 
-A = 1
-B = 1
-R1 = 1
-R2 = 2
-K2 = 5
-K1 = screen_size * K2 * 3 / (8 * (R1 + R2))
+render_frame(float A, float B) {
+  // precompute sines and cosines of A and B
+  float cosA = cos(A), sinA = sin(A);
+  float cosB = cos(B), sinB = sin(B);
 
+  char output[0..screen_width, 0..screen_height] = ' ';
+  float zbuffer[0..screen_width, 0..screen_height] = 0;
 
-def render_frame(A: float, B: float) -> np.ndarray:
-    """
-    Returns a frame of the spinning 3D donut.
-    Based on the pseudocode from: https://www.a1k0n.net/2011/07/20/donut-math.html
-    """
-    cos_A = np.cos(A)
-    sin_A = np.sin(A)
-    cos_B = np.cos(B)
-    sin_B = np.sin(B)
+  // theta goes around the cross-sectional circle of a torus
+  for (float theta=0; theta < 2*pi; theta += theta_spacing) {
+    // precompute sines and cosines of theta
+    float costheta = cos(theta), sintheta = sin(theta);
 
-    output = np.full((screen_size, screen_size), " ")  # (40, 40)
-    zbuffer = np.zeros((screen_size, screen_size))  # (40, 40)
+    // phi goes around the center of revolution of a torus
+    for(float phi=0; phi < 2*pi; phi += phi_spacing) {
+      // precompute sines and cosines of phi
+      float cosphi = cos(phi), sinphi = sin(phi);
+    
+      // the x,y coordinate of the circle, before revolving (factored
+      // out of the above equations)
+      float circlex = R2 + R1*costheta;
+      float circley = R1*sintheta;
 
-    cos_phi = np.cos(phi := np.arange(0, 2 * np.pi, phi_spacing))  # (315,)
-    sin_phi = np.sin(phi)  # (315,)
-    cos_theta = np.cos(theta := np.arange(0, 2 * np.pi, theta_spacing))  # (90,)
-    sin_theta = np.sin(theta)  # (90,)
-    circle_x = R2 + R1 * cos_theta  # (90,)
-    circle_y = R1 * sin_theta  # (90,)
+      // final 3D (x,y,z) coordinate after rotations, directly from
+      // our math above
+      float x = circlex*(cosB*cosphi + sinA*sinB*sinphi)
+        - circley*cosA*sinB; 
+      float y = circlex*(sinB*cosphi - sinA*cosB*sinphi)
+        + circley*cosA*cosB;
+      float z = K2 + cosA*circlex*sinphi + circley*sinA;
+      float ooz = 1/z;  // "one over z"
+      
+      // x and y projection.  note that y is negated here, because y
+      // goes up in 3D space but down on 2D displays.
+      int xp = (int) (screen_width/2 + K1*ooz*x);
+      int yp = (int) (screen_height/2 - K1*ooz*y);
+      
+      // calculate luminance.  ugly, but correct.
+      float L = cosphi*costheta*sinB - cosA*costheta*sinphi -
+        sinA*sintheta + cosB*(cosA*sintheta - costheta*sinA*sinphi);
+      // L ranges from -sqrt(2) to +sqrt(2).  If it's < 0, the surface
+      // is pointing away from us, so we won't bother trying to plot it.
+      if (L > 0) {
+        // test against the z-buffer.  larger 1/z means the pixel is
+        // closer to the viewer than what's already plotted.
+        if(ooz > zbuffer[xp,yp]) {
+          zbuffer[xp, yp] = ooz;
+          int luminance_index = L*8;
+          // luminance_index is now in the range 0..11 (8*sqrt(2) = 11.3)
+          // now we lookup the character corresponding to the
+          // luminance and plot it in our output:
+          output[xp, yp] = ".,-~:;=!*#$@"[luminance_index];
+        }
+      }
+    }
+  }
 
-    x = (np.outer(cos_B * cos_phi + sin_A * sin_B * sin_phi, circle_x) - circle_y * cos_A * sin_B).T  # (90, 315)
-    y = (np.outer(sin_B * cos_phi - sin_A * cos_B * sin_phi, circle_x) + circle_y * cos_A * cos_B).T  # (90, 315)
-    z = ((K2 + cos_A * np.outer(sin_phi, circle_x)) + circle_y * sin_A).T  # (90, 315)
-    ooz = np.reciprocal(z)  # Calculates 1/z
-    xp = (screen_size / 2 + K1 * ooz * x).astype(int)  # (90, 315)
-    yp = (screen_size / 2 - K1 * ooz * y).astype(int)  # (90, 315)
-    L1 = (((np.outer(cos_phi, cos_theta) * sin_B) - cos_A * np.outer(sin_phi, cos_theta)) - sin_A * sin_theta)  # (315, 90)
-    L2 = cos_B * (cos_A * sin_theta - np.outer(sin_phi, cos_theta * sin_A))  # (315, 90)
-    L = np.around(((L1 + L2) * 8)).astype(int).T  # (90, 315)
-    mask_L = L >= 0  # (90, 315)
-    chars = illumination[L]  # (90, 315)
-
-    for i in range(90):
-        mask = mask_L[i] & (ooz[i] > zbuffer[xp[i], yp[i]])  # (315,)
-
-        zbuffer[xp[i], yp[i]] = np.where(mask, ooz[i], zbuffer[xp[i], yp[i]])
-        output[xp[i], yp[i]] = np.where(mask, chars[i], output[xp[i], yp[i]])
-
-    return output
-
-
-def pprint(array: np.ndarray) -> None:
-    """Pretty print the frame."""
-    print(*[" ".join(row) for row in array], sep="\n")
-
-
-if __name__ == "__main__":
-    for _ in range(screen_size * screen_size):
-        A += theta_spacing
-        B += phi_spacing
-        print("\x1b[H")
-        pprint(render_frame(A, B))
+  // now, dump output[] to the screen.
+  // bring cursor to "home" location, in just about any currently-used
+  // terminal emulation mode
+  printf("\x1b[H");
+  for (int j = 0; j < screen_height; j++) {
+    for (int i = 0; i < screen_width; i++) {
+      putchar(output[i,j]);
+    }
+    putchar('\n');
+  }
+  
+}
 ```
